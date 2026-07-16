@@ -18,6 +18,18 @@
 
 static const FString RopeParticleSocketPrefix(TEXT("Particle_"));
 
+// UE 5.6 renamed FBodyInstance::GetPhysicsActorHandle() to GetPhysicsActor().
+// Wrap the accessor so this component also builds on UE 5.5 and earlier,
+// where only GetPhysicsActorHandle() (returning a reference) is available.
+static FORCEINLINE FPhysicsActorHandle EdenGetBodyPhysicsActor(const FBodyInstance* BI)
+{
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6)
+	return BI->GetPhysicsActor();
+#else
+	return BI->GetPhysicsActorHandle();
+#endif
+}
+
 //////////////////////////////////////////////////////////////////////////
 // FEdenRigidRopeEndPhysicsTickFunction
 
@@ -1632,7 +1644,7 @@ void UEdenRigidRopeComponent::SetupSelfCollisionDisable()
 	{
 		if (BI && BI->IsValidBodyInstance())
 		{
-			if (FPhysicsActorHandle Handle = BI->GetPhysicsActor())
+			if (FPhysicsActorHandle Handle = EdenGetBodyPhysicsActor(BI))
 			{
 				Handles.Add(Handle);
 			}
@@ -1686,7 +1698,7 @@ void UEdenRigidRopeComponent::TeardownSelfCollisionDisable()
 	{
 		if (BI && BI->IsValidBodyInstance())
 		{
-			if (FPhysicsActorHandle Handle = BI->GetPhysicsActor())
+			if (FPhysicsActorHandle Handle = EdenGetBodyPhysicsActor(BI))
 			{
 				Handles.Add(Handle);
 			}
