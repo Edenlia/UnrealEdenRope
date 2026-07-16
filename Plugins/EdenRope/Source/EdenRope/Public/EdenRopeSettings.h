@@ -21,6 +21,14 @@ class EDENROPE_API UEdenRopeSettings : public UDeveloperSettings
 public:
 	UEdenRopeSettings();
 
+	/**
+	 * 是否启用 EdenRope 物理世界（XPBD Solver）。
+	 * 关闭时：不创建 Solver Actor，不检查 EdenParticle 碰撞通道，也不发出相关警告。
+	 * RigidEdenRope 使用标准 Chaos 物理，不受此开关影响。
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "General", meta = (DisplayName = "Enable Eden Physics World"))
+	bool bEnableEdenPhysicsWorld = false;
+
 	/** 求解器配置 */
 	UPROPERTY(config, EditAnywhere, Category = "Solver", meta = (ShowOnlyInnerProperties))
 	FEdenRopeSolverConfiguration SolverConfiguration;

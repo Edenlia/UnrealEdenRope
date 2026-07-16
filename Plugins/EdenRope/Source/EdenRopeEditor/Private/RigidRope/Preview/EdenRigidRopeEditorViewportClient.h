@@ -7,7 +7,6 @@
 
 class FAdvancedPreviewScene;
 class UEdenRigidRopeAsset;
-class UMaterialInstanceDynamic;
 
 class FEdenRigidRopeEditorViewportClient : public FEditorViewportClient
 {
@@ -30,7 +29,6 @@ public:
 	bool IsSimulating() const { return bSimulating; }
 
 private:
-	void DrawBodies(FPrimitiveDrawInterface* PDI);
 	void DrawConstraints(FPrimitiveDrawInterface* PDI);
 
 	/** Compute body transform for a segment at rest (straight line along X) */
@@ -38,6 +36,4 @@ private:
 
 	TWeakObjectPtr<UEdenRigidRopeAsset> RopeAsset;
 	bool bSimulating = false;
-
-	TObjectPtr<UMaterialInstanceDynamic> BodyMID;
 };

@@ -11,6 +11,8 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/PhysicsSettings.h"
 #include "PhysicsProxy/SingleParticlePhysicsProxy.h"
+#include "Chaos/ChaosEngineInterface.h"
+#include "Net/UnrealNetwork.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(EdenRigidRopeComponent)
 
@@ -58,6 +60,8 @@ UEdenRigidRopeComponent::UEdenRigidRopeComponent()
 	EndPhysicsTickFunction.bStartWithTickEnabled = true;
 
 	SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
+
+	SetIsReplicatedByDefault(true);
 }
 
 void UEdenRigidRopeComponent::SetRopeAsset(UEdenRigidRopeAsset* NewAsset)
@@ -120,6 +124,22 @@ void UEdenRigidRopeComponent::SetRopeAsset(UEdenRigidRopeAsset* NewAsset)
 	}
 }
 
+void UEdenRigidRopeComponent::OnRep_RopeAsset()
+{
+	// After replicate RopeAsset, reset particle, physics, render state
+	UEdenRigidRopeAsset* NewAsset = RopeAsset;
+	RopeAsset = nullptr;
+	SetRopeAsset(NewAsset);
+}
+
+void UEdenRigidRopeComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	// For Runtime Setup RopeAsset in Server&Client case, RopeAsset needs to be replicated
+	DOREPLIFETIME(UEdenRigidRopeComponent, RopeAsset);
+}
+
 #if WITH_EDITOR
 void UEdenRigidRopeComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
@@ -173,6 +193,14 @@ void UEdenRigidRopeComponent::PostEditChangeProperty(FPropertyChangedEvent& Prop
 		{
 			UnregisterComponent();
 			RegisterComponent();
+		}
+	}
+	else if (PropertyName == GET_MEMBER_NAME_CHECKED(UEdenRigidRopeComponent, bEnableSelfCollision))
+	{
+		// 重建物理状态，让 SetupSelfCollisionDisable 按新值重新登记/取消忽略关系
+		if (IsRegistered() && HasValidPhysicsState())
+		{
+			RecreatePhysicsState();
 		}
 	}
 
@@ -1480,7 +1508,7 @@ void UEdenRigidRopeComponent::OnCreatePhysicsState()
 		return;
 	}
 
-	// 2. Create Aggregate (prevents bodies from colliding with each other)
+	// 2. Create Aggregate (NOTE: no-op in Chaos; self-collision is handled by SetupSelfCollisionDisable below)
 	const int32 NumSegs = RopeAsset->NumSegments;
 	if (!Aggregate.IsValid())
 	{
@@ -1516,11 +1544,15 @@ void UEdenRigidRopeComponent::OnCreatePhysicsState()
 		}
 	}
 
-	// 7. Re-initialize any external PhysicsConstraintComponents that tried to
+	// 7. Disable self-collision between this rope's own bodies (unless explicitly enabled).
+	// Done after bodies exist and have valid physics actors.
+	SetupSelfCollisionDisable();
+
+	// 8. Re-initialize any external PhysicsConstraintComponents that tried to
 	// bind before our bodies existed (fixes initialization order race condition)
 	ReinitPendingExternalConstraints();
 
-	// 8. 物理体创建完成后更新 ParticleSpaceTransforms 缓存
+	// 9. 物理体创建完成后更新 ParticleSpaceTransforms 缓存
 	UpdateParticleSpaceTransforms();
 
 	// 10. 初始化 TransformToRoot：Component 相对于 RootBody (Bodies[0]) 的固定偏移
@@ -1550,6 +1582,9 @@ void UEdenRigidRopeComponent::OnDestroyPhysicsState()
 
 void UEdenRigidRopeComponent::TermRopePhysics()
 {
+	// Remove self-collision ignore relationships while body handles are still valid
+	TeardownSelfCollisionDisable();
+
 	// First destroy constraints
 	for (FConstraintInstance* Constraint : Constraints)
 	{
@@ -1580,6 +1615,98 @@ void UEdenRigidRopeComponent::TermRopePhysics()
 
 	// BodySetup is a UObject, will be cleaned up by GC
 	RopeBodySetup = nullptr;
+}
+
+void UEdenRigidRopeComponent::SetupSelfCollisionDisable()
+{
+	// 已启用自碰撞则无需禁用；已经登记过也直接返回，避免重复
+	if (!RopeAsset || bEnableSelfCollision || bSelfCollisionDisabled)
+	{
+		return;
+	}
+
+	// 收集所有有效的物理 actor handle
+	TArray<FPhysicsActorHandle> Handles;
+	Handles.Reserve(Bodies.Num());
+	for (FBodyInstance* BI : Bodies)
+	{
+		if (BI && BI->IsValidBodyInstance())
+		{
+			if (FPhysicsActorHandle Handle = BI->GetPhysicsActor())
+			{
+				Handles.Add(Handle);
+			}
+		}
+	}
+
+	if (Handles.Num() < 2)
+	{
+		return; // 少于两个 body 无需禁用自碰撞
+	}
+
+	// 为每一对 body 建立忽略关系。IgnoreCollisionManager 内部会自动做成双向
+	// （见 FIgnoreCollisionManager::AddIgnoreCollisions），因此每对只需登记一次。
+	// 做法与 USkeletalMeshComponent::InitCollisionRelationships 一致。
+	TMap<FPhysicsActorHandle, TArray<FPhysicsActorHandle>> DisabledCollisions;
+	for (int32 i = 0; i < Handles.Num() - 1; ++i)
+	{
+		TArray<FPhysicsActorHandle>& Targets = DisabledCollisions.Add(Handles[i], TArray<FPhysicsActorHandle>());
+		Targets.Reserve(Handles.Num() - i - 1);
+		for (int32 j = i + 1; j < Handles.Num(); ++j)
+		{
+			Targets.Add(Handles[j]);
+		}
+	}
+
+	UWorld* World = GetWorld();
+	FPhysScene* PhysScene = World ? World->GetPhysicsScene() : nullptr;
+	if (!PhysScene)
+	{
+		return;
+	}
+
+	FPhysicsCommand::ExecuteWrite(PhysScene, [&DisabledCollisions]()
+	{
+		FChaosEngineInterface::AddDisabledCollisionsFor_AssumesLocked(DisabledCollisions);
+	});
+
+	bSelfCollisionDisabled = true;
+}
+
+void UEdenRigidRopeComponent::TeardownSelfCollisionDisable()
+{
+	if (!bSelfCollisionDisabled)
+	{
+		return;
+	}
+
+	TArray<FPhysicsActorHandle> Handles;
+	Handles.Reserve(Bodies.Num());
+	for (FBodyInstance* BI : Bodies)
+	{
+		if (BI && BI->IsValidBodyInstance())
+		{
+			if (FPhysicsActorHandle Handle = BI->GetPhysicsActor())
+			{
+				Handles.Add(Handle);
+			}
+		}
+	}
+
+	if (Handles.Num() > 0)
+	{
+		UWorld* World = GetWorld();
+		FPhysScene* PhysScene = World ? World->GetPhysicsScene() : nullptr;
+		if (PhysScene)
+		{
+			FPhysicsCommand::ExecuteWrite(PhysScene, [&Handles]()
+			{
+				FChaosEngineInterface::RemoveDisabledCollisionsFor_AssumesLocked(Handles);
+			});
+		}
+	}
+
+	bSelfCollisionDisabled = false;
 }
 
 void UEdenRigidRopeComponent::ReinitPendingExternalConstraints()

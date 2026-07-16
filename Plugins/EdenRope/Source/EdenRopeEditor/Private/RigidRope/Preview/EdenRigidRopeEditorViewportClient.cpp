@@ -7,7 +7,6 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/PhysicsConstraintTemplate.h"
 #include "PhysicsEngine/ConstraintInstance.h"
-#include "Materials/MaterialInstanceDynamic.h"
 
 FEdenRigidRopeEditorViewportClient::FEdenRigidRopeEditorViewportClient(
 	FAdvancedPreviewScene& InPreviewScene,
@@ -18,13 +17,6 @@ FEdenRigidRopeEditorViewportClient::FEdenRigidRopeEditorViewportClient(
 {
 	SetRealtime(true);
 
-	// Translucent material for body debug draw (same material as PhAT editor)
-	UMaterialInterface* BaseMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EditorMaterials/PhAT_UnselectedMaterial.PhAT_UnselectedMaterial"));
-	if (BaseMat)
-	{
-		BodyMID = UMaterialInstanceDynamic::Create(BaseMat, GetTransientPackage());
-	}
-
 	// Camera setup
 	SetViewLocation(FVector(-150.f, 0.f, 50.f));
 	SetViewRotation(FRotator(-10.f, 0.f, 0.f));
@@ -32,7 +24,6 @@ FEdenRigidRopeEditorViewportClient::FEdenRigidRopeEditorViewportClient(
 
 void FEdenRigidRopeEditorViewportClient::AddReferencedObjects(FReferenceCollector& Collector)
 {
-	Collector.AddReferencedObject(BodyMID);
 }
 
 void FEdenRigidRopeEditorViewportClient::Tick(float DeltaSeconds)
@@ -54,8 +45,12 @@ void FEdenRigidRopeEditorViewportClient::Draw(const FSceneView* View, FPrimitive
 		return;
 	}
 
-	DrawBodies(PDI);
-	DrawConstraints(PDI);
+	// 碰撞体由 rope component 的 scene proxy 绘制，并已受 Collision show flag 控制，此处不再重复绘制。
+	// 约束没有其它绘制路径，仅在 Constraints show flag 开启时绘制。
+	if (View->Family->EngineShowFlags.Constraints)
+	{
+		DrawConstraints(PDI);
+	}
 }
 
 FTransform FEdenRigidRopeEditorViewportClient::GetRestBodyTransform(int32 BodyIndex) const
@@ -89,64 +84,6 @@ FTransform FEdenRigidRopeEditorViewportClient::GetRestBodyTransform(int32 BodyIn
 
 	const FTransform PreviewOriginTM(RopeAsset->PreviewRotation.Quaternion(), RopeAsset->PreviewOrigin);
 	return FTransform(BodyRot, LocalCenter) * PreviewOriginTM;
-}
-
-void FEdenRigidRopeEditorViewportClient::DrawBodies(FPrimitiveDrawInterface* PDI)
-{
-	UEdenRigidRopeAsset* Asset = RopeAsset.Get();
-	if (!Asset)
-	{
-		return;
-	}
-
-	const FColor WireColor(180, 200, 255, 200);
-
-	for (int32 i = 0; i < Asset->BodySetups.Num(); ++i)
-	{
-		UBodySetup* BS = Asset->BodySetups[i];
-		if (!BS)
-		{
-			continue;
-		}
-
-		const FTransform BodyTM = GetRestBodyTransform(i);
-
-		for (const FKSphylElem& Sphyl : BS->AggGeom.SphylElems)
-		{
-			FTransform ElemTM = Sphyl.GetTransform() * BodyTM;
-			FVector Scale(1.0f);
-
-			if (BodyMID)
-			{
-				Sphyl.DrawElemSolid(PDI, ElemTM, Scale, BodyMID->GetRenderProxy());
-			}
-			Sphyl.DrawElemWire(PDI, ElemTM, Scale, WireColor);
-		}
-
-		for (const FKSphereElem& Sphere : BS->AggGeom.SphereElems)
-		{
-			FTransform ElemTM = Sphere.GetTransform() * BodyTM;
-			FVector Scale(1.0f);
-
-			if (BodyMID)
-			{
-				Sphere.DrawElemSolid(PDI, ElemTM, Scale, BodyMID->GetRenderProxy());
-			}
-			Sphere.DrawElemWire(PDI, ElemTM, Scale, WireColor);
-		}
-
-		for (const FKBoxElem& Box : BS->AggGeom.BoxElems)
-		{
-			FTransform ElemTM = Box.GetTransform() * BodyTM;
-			FVector Scale(1.0f);
-
-			if (BodyMID)
-			{
-				Box.DrawElemSolid(PDI, ElemTM, Scale, BodyMID->GetRenderProxy());
-			}
-			Box.DrawElemWire(PDI, ElemTM, Scale, WireColor);
-		}
-	}
 }
 
 void FEdenRigidRopeEditorViewportClient::DrawConstraints(FPrimitiveDrawInterface* PDI)

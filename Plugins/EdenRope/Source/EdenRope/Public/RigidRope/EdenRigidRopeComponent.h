@@ -76,6 +76,7 @@ public:
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
+	virtual void GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const override;
 	//~ End UObject Interface.
 
 	//~ Begin UActorComponent Interface.
@@ -233,8 +234,12 @@ public:
 	FVector GetLocalForwardVector() const;
 
 	/** The RigidRope asset that defines this rope's parameters (segments, physics, rendering, etc.) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rope")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rope", ReplicatedUsing=OnRep_RopeAsset)
 	TObjectPtr<UEdenRigidRopeAsset> RopeAsset;
+
+	/** Replication callback: rebuild particles/physics/render when RopeAsset arrives on clients. */
+	UFUNCTION()
+	void OnRep_RopeAsset();
 
 	/** 当前第一个 Particle 的 Socket 名称（只读，由 RopeAsset 自动生成） */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Rope")
@@ -244,16 +249,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Rope")
 	void SetRopeAsset(UEdenRigidRopeAsset* NewAsset);
 
-	// ========== Rope Rendering Properties ==========
-	// 注意：NumSegments, CableWidth, NumSides, TileMaterial, Smoothing, Decimation, RopeLength
-	// 已迁移至 UEdenRigidRopeAsset，通过 RopeAsset 引用读取
-
-	// ========== Rope Physics Properties ==========
-	// 注意：SegmentMass, SwingLimitAngle, SwingStiffness 已迁移至 UEdenRigidRopeAsset
-	// 物理模拟开关直接使用 UPrimitiveComponent::BodyInstance.bSimulatePhysics（面板上的 "Simulate Physics"）
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rope")
 	bool bDebugUseConstraints = true;
+
+	/**
+	 * 是否允许同一根绳子内的各 body 相互碰撞（自碰撞）。
+	 * 关闭（默认）时，运行时会像 SkeletalMesh 的 PhysicsAsset 一样，
+	 * 禁用同一 rope 内所有 body 两两之间的碰撞（通过 Chaos IgnoreCollisionManager）。
+	 * 开启时，各 segment 之间会正常碰撞（相邻 segment 仍由 constraint 的 bDisableCollision 处理）。
+	 * 可在 Component 或对应的 EdenRigidRopeActor 中修改。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rope",
+		meta=(DisplayName="Enable Self Collision"))
+	bool bEnableSelfCollision = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rope")
 	float DebugPhysicsThickness = 1.0f;
@@ -324,6 +332,17 @@ private:
 	void TermRopePhysics();
 
 	/**
+	 * Disable collision between every pair of bodies in this rope (self-collision off),
+	 * using the Chaos IgnoreCollisionManager — the same mechanism SkeletalMesh uses for
+	 * its PhysicsAsset CollisionDisableTable. No-op when bEnableSelfCollision is true.
+	 * Must be called after bodies have valid physics actors.
+	 */
+	void SetupSelfCollisionDisable();
+
+	/** Remove the self-collision ignore relationships registered by SetupSelfCollisionDisable(). Call before terminating bodies. */
+	void TeardownSelfCollisionDisable();
+
+	/**
 	 * After bodies are created, scan the owning Actor for external
 	 * UPhysicsConstraintComponents that reference this component.
 	 * If any failed to init (because our bodies didn't exist yet),
@@ -390,8 +409,15 @@ private:
 	/** Constraints connecting adjacent bodies */
 	TArray<FConstraintInstance*> Constraints;
 
-	/** Physics aggregate to group all bodies (prevents self-collision) */
+	/**
+	 * Physics aggregate to group all bodies.
+	 * NOTE: Chaos currently treats aggregates as a no-op (see FChaosEngineInterface::CreateAggregate),
+	 * so this does NOT prevent self-collision. Self-collision is controlled via SetupSelfCollisionDisable().
+	 */
 	FPhysicsAggregateHandle Aggregate;
+
+	/** True while this rope has self-collision ignore relationships registered (see SetupSelfCollisionDisable). */
+	bool bSelfCollisionDisabled = false;
 
 	/** Tick function for post-physics sync */
 	FEdenRigidRopeEndPhysicsTickFunction EndPhysicsTickFunction;

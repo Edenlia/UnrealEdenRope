@@ -201,6 +201,10 @@ void UEdenRigidRopeAsset::ConfigureConstraintTemplate(UPhysicsConstraintTemplate
 
 	// Disable collision between constrained bodies
 	Profile.bDisableCollision = true;
+
+#if WITH_EDITOR
+	InTemplate->UpdateProfileInstance();
+#endif
 }
 
 void UEdenRigidRopeAsset::RebuildPhysicsData()
@@ -266,6 +270,18 @@ void UEdenRigidRopeAsset::PostLoad()
 	if (BodySetups.Num() == 0)
 	{
 		RebuildPhysicsData();
+	}
+	else
+	{
+		const int32 NumBodies = FMath::Max(NumSegments, 2);
+		const float SegmentLength = RopeLength / NumBodies;
+		for (int32 i = 0; i < ConstraintSetup.Num(); ++i)
+		{
+			if (ConstraintSetup[i])
+			{
+				ConfigureConstraintTemplate(ConstraintSetup[i], i, SegmentLength);
+			}
+		}
 	}
 
 	// 确保加载后显示名称正确

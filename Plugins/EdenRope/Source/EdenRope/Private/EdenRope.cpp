@@ -46,10 +46,10 @@ void FEdenRopeModule::OnPreBeginPIE(const bool bIsSimulating)
 
 void FEdenRopeModule::OnPostBeginPIE(const bool bIsSimulating)
 {
-	if (!Eden::bEdenParticleChannelValid)
+	const UEdenRopeSettings* Settings = UEdenRopeSettings::Get();
+	if (Settings && Settings->bEnableEdenPhysicsWorld && !Eden::bEdenParticleChannelValid)
 	{
-		const UEdenRopeSettings* Settings = UEdenRopeSettings::Get();
-		const FName ChannelName = Settings ? Settings->EdenParticleChannelName : NAME_None;
+		const FName ChannelName = Settings->EdenParticleChannelName;
 		FMessageLog("PIE").Warning(
 			FText::Format(
 				LOCTEXT("EdenRopeChannelNotFound",

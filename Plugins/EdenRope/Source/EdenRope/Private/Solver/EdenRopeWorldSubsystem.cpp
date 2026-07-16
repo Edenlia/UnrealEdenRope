@@ -36,8 +36,17 @@ void UEdenRopeWorldSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 
 	// 从 Settings 获取 SolverActorClass
 	const UEdenRopeSettings* Settings = UEdenRopeSettings::Get();
+
+	// 物理世界未启用时不创建 Solver（RigidEdenRope 不受影响）
+	if (!Settings || !Settings->bEnableEdenPhysicsWorld)
+	{
+		UE_LOG(LogEdenRopeSubsystem, Log, TEXT("EdenPhysicsWorld disabled; skipping solver spawn for world %s"),
+			*InWorld.GetName());
+		return;
+	}
+
 	UClass* SolverClass = nullptr;
-	
+
 	if (Settings && !Settings->SolverActorClass.IsNull())
 	{
 		SolverClass = Settings->SolverActorClass.LoadSynchronous();

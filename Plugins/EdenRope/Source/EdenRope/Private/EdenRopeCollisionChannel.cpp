@@ -21,6 +21,14 @@ namespace Eden
 			return;
 		}
 
+		// 物理世界未启用时，碰撞通道不会被使用，静默默认为 PhysicsBody 且不发出警告
+		if (!Settings->bEnableEdenPhysicsWorld)
+		{
+			GEdenParticleCollisionChannel = ECC_PhysicsBody;
+			bEdenParticleChannelValid = false;
+			return;
+		}
+
 		const FName ChannelName = Settings->EdenParticleChannelName;
 
 		if (ChannelName.IsNone())
